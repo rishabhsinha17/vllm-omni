@@ -105,9 +105,35 @@ def get_model_parametrization(model_name: str, test_info: DiffusionModelTestOpts
     ]
 
 
+def get_batch_invariance_parametrization(model_name: str, test_info: DiffusionModelTestOpts):
+    """Build the pytest param for one model's batch-invariance check.
+
+    Only models opted in with check_batch_invariance are returned, and only as
+    the base case (no accelerations): the check varies batch composition, which
+    is independent of the acceleration groups, and it builds its own engine
+    with max_num_seqs=2, which pipelines without supports_request_batch refuse.
+    """
+    if not test_info.check_batch_invariance:
+        return []
+    return [
+        pytest.param(
+            model_name,
+            test_info.supported_tasks,
+            id=model_name,
+            marks=get_test_group_marks(
+                model_name,
+                None,
+                test_info.marks,
+                model_type_marker=test_info.model_type_marker,
+            ),
+        )
+    ]
+
+
 def get_parametrized_options(
     test_settings: dict[str, DiffusionModelTestOpts],
     online: bool = False,
+    batch_invariance: bool = False,
 ):
     """Converts all the DiffusionModelTestOpts into an expanded list of parameters
     based on which accelerations are available.
@@ -115,12 +141,21 @@ def get_parametrized_options(
     When online=True and a model has online_base_only=True, only the base case
     (no accelerations) is included for that model's parametrization to minimize
     redundancy between offline / online tests.
+
+    When batch_invariance=True, the params are (model_name, supported_tasks) for
+    the models opted in with check_batch_invariance, base case only.
     """
     # Get a list per model type, where each entry contains a tuple of all of
     # that model type's cases, then flatten them into the top level so that
     # we can consume them in one mark.parametrize call.
-    parametrization = [
-        get_model_parametrization(model_name, test_info, online=online)
-        for model_name, test_info in test_settings.items()
-    ]
+    if batch_invariance:
+        parametrization = [
+            get_batch_invariance_parametrization(model_name, test_info)
+            for model_name, test_info in test_settings.items()
+        ]
+    else:
+        parametrization = [
+            get_model_parametrization(model_name, test_info, online=online)
+            for model_name, test_info in test_settings.items()
+        ]
     return list(itertools.chain(*parametrization))

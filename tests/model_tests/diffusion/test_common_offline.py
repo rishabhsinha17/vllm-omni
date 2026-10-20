@@ -13,6 +13,8 @@ from tests.model_tests.diffusion.config_types import (
 )
 from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
 from tests.model_tests.diffusion.task_runners import (
+    BATCH_INVARIANCE_OMNI_KWARGS,
+    run_and_validate_batch_invariance,
     run_and_validate_determinism,
     run_and_validate_image_to_image_request,
     run_and_validate_image_to_video_request,
@@ -89,5 +91,44 @@ def test_pipeline_on_supported_tasks(
             for task_type in supported_tasks:
                 with subtests.test(msg=f"multi_output[{task_type}]"):
                     run_and_validate_multi_output(omni, task_type)
+    finally:
+        omni.close()
+
+
+@pytest.mark.parametrize(
+    "model_name,supported_tasks",
+    get_parametrized_options(DIFFUSION_TEST_SETTINGS, batch_invariance=True),
+)
+def test_batch_invariance_on_supported_tasks(
+    model_name,
+    supported_tasks: list[DiffusionTasks],
+    tiny_model_paths: dict[str, str],
+    subtests,
+):
+    """Check that a request's output does not depend on its batch neighbour or position.
+
+    Only pipelines opted in with check_batch_invariance run here. The engine is
+    built separately from the smoke test because co-batching needs max_num_seqs=2
+    and an admission window, and pipelines without supports_request_batch refuse
+    max_num_seqs > 1 at construction. Same-seed repeatability is covered by the
+    determinism check above; this one varies the batch composition instead.
+    """
+    settings = DIFFUSION_TEST_SETTINGS[model_name]
+    model_path = tiny_model_paths[model_name]
+    model_kwargs = {}
+    if settings.checkpoint_filename is not None:
+        model_path = str(Path(model_path) / settings.checkpoint_filename)
+        model_kwargs["model_class_name"] = model_name
+    omni = build_omni_from_diff_accelerations(
+        accelerations=None,
+        model=model_path,
+        enforce_eager=True,
+        **BATCH_INVARIANCE_OMNI_KWARGS,
+        **model_kwargs,
+    )
+    try:
+        for task_type in supported_tasks:
+            with subtests.test(msg=f"batch_invariance[{task_type}]"):
+                run_and_validate_batch_invariance(omni, task_type)
     finally:
         omni.close()

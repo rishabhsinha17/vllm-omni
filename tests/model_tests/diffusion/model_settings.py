@@ -110,6 +110,7 @@ DIFFUSION_TEST_SETTINGS = {
         builder=diff_model_builders.tiny_qwen_image_builder,
         supported_tasks=[DiffusionTasks.TEXT_TO_IMAGE],
         model_type_marker=ModelTypeMarker.DIFFUSION,
+        check_batch_invariance=True,
     ),
     "LongCatImagePipeline": DiffusionModelTestOpts(
         model="meituan-longcat/LongCat-Image",
@@ -138,6 +139,7 @@ DIFFUSION_TEST_SETTINGS = {
         builder=diff_model_builders.tiny_flux_builder,
         supported_tasks=[DiffusionTasks.TEXT_TO_IMAGE],
         model_type_marker=ModelTypeMarker.DIFFUSION,
+        check_batch_invariance=True,
     ),
     "FluxKontextPipeline": DiffusionModelTestOpts(
         model="black-forest-labs/FLUX.1-Kontext-dev",

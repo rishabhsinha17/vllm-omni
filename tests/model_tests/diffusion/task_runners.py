@@ -8,6 +8,8 @@ image to image, and so on. These are called by the core test runner.
 
 import base64
 import io
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
@@ -50,6 +52,20 @@ AUDIO_GEN_SAMPLING_PARAMS = OmniDiffusionSamplingParams(
     frame_rate=24.0,
     seed=42,
 )
+
+# Batch invariance: the neighbour shares the stage params (Omni.generate takes one
+# params object per stage), so only its prompt and the batch composition differ.
+NEIGHBOUR_PROMPT = "A different dummy prompt"
+
+# Engine kwargs for the batch-invariance check. Two running requests and a
+# non-zero admission window let two prompts from one generate() call land in
+# the same request batch (see RequestScheduler.get_admission_wait_decision).
+BATCH_INVARIANCE_OMNI_KWARGS: dict[str, Any] = {"max_num_seqs": 2, "request_batch_max_wait_ms": 2000.0}
+
+# The admission window closes 50 ms after the waiting count stops changing, so a
+# slow second submission can still be dispatched alone; retry a few times before
+# treating the missing co-batch as a failure.
+BATCH_INVARIANCE_ATTEMPTS = 3
 
 # Online extra_body for diffusion requests
 IMAGE_GEN_EXTRA_BODY = {
@@ -302,6 +318,90 @@ def run_and_validate_determinism(omni: Omni, task_type: DiffusionTasks):
         )
     else:
         raise ValueError(f"Task type {task_type} is not yet supported for determinism checks")
+
+
+@contextmanager
+def record_scheduled_batch_sizes() -> Iterator[list[int]]:
+    """Record how many new requests each RequestScheduler.schedule() call dispatched.
+
+    A single-stage, single-replica diffusion model uses the inline client, so the
+    engine and its scheduler run in this process and patching the class method
+    observes every dispatch. The record guards against a false pass: a run that
+    quietly serialises the two requests shows [1, 1] here instead of [2] and must
+    not be reported as co-batched.
+    """
+    from vllm_omni.diffusion.sched.request_scheduler import RequestScheduler
+
+    sizes: list[int] = []
+    original = RequestScheduler.schedule
+
+    def schedule(self):
+        output = original(self)
+        if output.scheduled_new_reqs:
+            sizes.append(len(output.scheduled_new_reqs))
+        return output
+
+    RequestScheduler.schedule = schedule  # type: ignore[method-assign]
+    try:
+        yield sizes
+    finally:
+        RequestScheduler.schedule = original  # type: ignore[method-assign]
+
+
+def _outputs_in_prompt_order(outputs: list[OmniRequestOutput]) -> list[OmniRequestOutput]:
+    """Order generate() outputs by prompt index; they arrive in completion order.
+
+    Omni.generate() assigns request ids of the form "<prompt index>_<uuid>".
+    """
+    return sorted(outputs, key=lambda output: int(output.request_id.split("_", 1)[0]))
+
+
+def _describe_difference(expected: np.ndarray, observed: np.ndarray) -> str:
+    """Summarise an element-wise difference for an assertion message."""
+    if expected.shape != observed.shape:
+        return f"shape {observed.shape} != {expected.shape}"
+    diff = np.abs(expected.astype(np.int64) - observed.astype(np.int64))
+    return f"{int(np.count_nonzero(diff))}/{diff.size} elements differ, max abs diff {int(diff.max())}"
+
+
+def run_and_validate_batch_invariance(omni: Omni, task_type: DiffusionTasks):
+    """Run the standard request alone and inside a two-request batch; outputs must match bitwise.
+
+    The checked request is the task's standard request (PROMPT, seed 42). The
+    batch submits NEIGHBOUR_PROMPT first, so the checked request also changes
+    batch position. ``omni`` must be built with BATCH_INVARIANCE_OMNI_KWARGS on a
+    pipeline with supports_request_batch=True; the scheduler record asserts the
+    two requests really shared one forward. Like run_and_validate_determinism,
+    the comparison is on the decoded uint8 arrays.
+    """
+    if task_type == DiffusionTasks.TEXT_TO_IMAGE:
+        params, extract = IMAGE_GEN_SAMPLING_PARAMS, _get_offline_images
+    elif task_type == DiffusionTasks.TEXT_TO_VIDEO:
+        params, extract = VIDEO_GEN_SAMPLING_PARAMS, _get_offline_videos
+    else:
+        pytest.skip(f"Batch invariance isn't checked for {task_type}.")
+
+    alone = extract(omni.generate({"prompt": PROMPT}, params))
+    prompts = [{"prompt": NEIGHBOUR_PROMPT}, {"prompt": PROMPT}]
+    for _ in range(BATCH_INVARIANCE_ATTEMPTS):
+        with record_scheduled_batch_sizes() as sizes:
+            outputs = omni.generate(prompts, params)
+        if sizes == [2]:
+            break
+    else:
+        pytest.fail(
+            f"The two requests were not co-batched in {BATCH_INVARIANCE_ATTEMPTS} attempts; last dispatch sizes {sizes}"
+        )
+    ordered = _outputs_in_prompt_order(outputs)
+    assert len(ordered) == len(prompts)
+    batched = extract([ordered[1]])
+    assert len(alone) == len(batched) == 1
+    for alone_output, batched_output in zip(alone, batched, strict=True):
+        alone_array, batched_array = np.asarray(alone_output), np.asarray(batched_output)
+        assert np.array_equal(alone_array, batched_array), (
+            f"{task_type.value} output changed when co-batched after another request: "
+            f"{_describe_difference(alone_array, batched_array)}"
+        )
 
 
 def run_and_validate_multi_output(omni: Omni, task_type: DiffusionTasks):

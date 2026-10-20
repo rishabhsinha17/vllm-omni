@@ -101,6 +101,12 @@ class DiffusionModelTestOpts(NamedTuple):
     # Native single-file models: builders/resolvers return the containing directory.
     checkpoint_filename: str | None = None
 
+    # Run the standard seeded request alone and inside a two-request batch and
+    # require bitwise-equal output (test_batch_invariance_on_supported_tasks).
+    # Needs a pipeline with supports_request_batch=True; opt in per pipeline
+    # once it has been measured, since a failure here is a real finding.
+    check_batch_invariance: bool = False
+
 
 ### Mappings & utils for building offline Omni() instances given a list of enabled accelerations
 ACC_OMNI_KWARGS: dict[DiffusionAccs, dict[str, Any]] = {
