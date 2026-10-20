@@ -115,19 +115,15 @@ def get_batch_invariance_parametrization(model_name: str, test_info: DiffusionMo
     """
     if not test_info.check_batch_invariance:
         return []
-    return [
-        pytest.param(
-            model_name,
-            test_info.supported_tasks,
-            id=model_name,
-            marks=get_test_group_marks(
-                model_name,
-                None,
-                test_info.marks,
-                model_type_marker=test_info.model_type_marker,
-            ),
-        )
-    ]
+    marks = get_test_group_marks(
+        model_name,
+        None,
+        test_info.marks,
+        model_type_marker=test_info.model_type_marker,
+    )
+    if test_info.batch_invariance_xfail_reason is not None:
+        marks.append(pytest.mark.xfail(strict=True, reason=test_info.batch_invariance_xfail_reason))
+    return [pytest.param(model_name, test_info.supported_tasks, id=model_name, marks=marks)]
 
 
 def get_parametrized_options(

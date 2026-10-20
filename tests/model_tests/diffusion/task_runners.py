@@ -67,6 +67,9 @@ BATCH_INVARIANCE_OMNI_KWARGS: dict[str, Any] = {"max_num_seqs": 2, "request_batc
 # treating the missing co-batch as a failure.
 BATCH_INVARIANCE_ATTEMPTS = 3
 
+# Tasks the batch-invariance check knows how to run and compare.
+BATCH_INVARIANCE_TASKS = (DiffusionTasks.TEXT_TO_IMAGE, DiffusionTasks.TEXT_TO_VIDEO)
+
 # Online extra_body for diffusion requests
 IMAGE_GEN_EXTRA_BODY = {
     "height": HEIGHT,
@@ -379,13 +382,14 @@ def run_and_validate_batch_invariance(omni: Omni, task_type: DiffusionTasks):
     elif task_type == DiffusionTasks.TEXT_TO_VIDEO:
         params, extract = VIDEO_GEN_SAMPLING_PARAMS, _get_offline_videos
     else:
-        pytest.skip(f"Batch invariance isn't checked for {task_type}.")
+        raise ValueError(f"Task type {task_type} is not yet supported for batch-invariance checks")
 
     alone = extract(omni.generate({"prompt": PROMPT}, params))
     prompts = [{"prompt": NEIGHBOUR_PROMPT}, {"prompt": PROMPT}]
-    for _ in range(BATCH_INVARIANCE_ATTEMPTS):
+    for attempt in range(1, BATCH_INVARIANCE_ATTEMPTS + 1):
         with record_scheduled_batch_sizes() as sizes:
             outputs = omni.generate(prompts, params)
+        print(f"[batch_invariance] {task_type.value} attempt {attempt}: dispatched batch sizes {sizes}")
         if sizes == [2]:
             break
     else:

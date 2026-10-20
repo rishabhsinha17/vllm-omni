@@ -14,6 +14,7 @@ from tests.model_tests.diffusion.config_types import (
 from tests.model_tests.diffusion.model_settings import DIFFUSION_TEST_SETTINGS
 from tests.model_tests.diffusion.task_runners import (
     BATCH_INVARIANCE_OMNI_KWARGS,
+    BATCH_INVARIANCE_TASKS,
     run_and_validate_batch_invariance,
     run_and_validate_determinism,
     run_and_validate_image_to_image_request,
@@ -103,7 +104,6 @@ def test_batch_invariance_on_supported_tasks(
     model_name,
     supported_tasks: list[DiffusionTasks],
     tiny_model_paths: dict[str, str],
-    subtests,
 ):
     """Check that a request's output does not depend on its batch neighbour or position.
 
@@ -112,7 +112,12 @@ def test_batch_invariance_on_supported_tasks(
     and an admission window, and pipelines without supports_request_batch refuse
     max_num_seqs > 1 at construction. Same-seed repeatability is covered by the
     determinism check above; this one varies the batch composition instead.
+    Tasks run in order without subtests so a strict xfail (see
+    batch_invariance_xfail_reason) applies to the whole case.
     """
+    tasks = [task_type for task_type in supported_tasks if task_type in BATCH_INVARIANCE_TASKS]
+    if not tasks:
+        pytest.skip(f"Batch invariance isn't checked for any of {supported_tasks}.")
     settings = DIFFUSION_TEST_SETTINGS[model_name]
     model_path = tiny_model_paths[model_name]
     model_kwargs = {}
@@ -127,8 +132,7 @@ def test_batch_invariance_on_supported_tasks(
         **model_kwargs,
     )
     try:
-        for task_type in supported_tasks:
-            with subtests.test(msg=f"batch_invariance[{task_type}]"):
-                run_and_validate_batch_invariance(omni, task_type)
+        for task_type in tasks:
+            run_and_validate_batch_invariance(omni, task_type)
     finally:
         omni.close()

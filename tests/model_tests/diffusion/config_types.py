@@ -107,6 +107,11 @@ class DiffusionModelTestOpts(NamedTuple):
     # once it has been measured, since a failure here is a real finding.
     check_batch_invariance: bool = False
 
+    # Set when the pipeline is measured and known not to be batch invariant yet.
+    # The check then runs as a strict xfail: it keeps measuring on every run, and
+    # the day the outputs match it fails loudly so the expectation gets updated.
+    batch_invariance_xfail_reason: str | None = None
+
 
 ### Mappings & utils for building offline Omni() instances given a list of enabled accelerations
 ACC_OMNI_KWARGS: dict[DiffusionAccs, dict[str, Any]] = {
